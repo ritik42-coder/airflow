@@ -1,0 +1,59 @@
+name: Build APK from ZIP
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip the uploaded project
+        run: |
+          set -euo pipefail
+          zip=$(find . -maxdepth 1 -iname '*.zip' | head -1)
+          if [ -z "$zip" ]; then echo "No .zip file found in the repo root"; exit 1; fi
+          echo "Using zip: $zip"
+          rm -rf _src && mkdir -p _src
+          unzip -q -o "$zip" -d _src -x '.github/*'
+          PROJ=_src
+          if [ ! -f "$PROJ/settings.gradle.kts" ]; then
+            found=$(find _src -name settings.gradle.kts -print -quit)
+            if [ -n "$found" ]; then PROJ=$(dirname "$found"); fi
+          fi
+          if [ ! -f "$PROJ/settings.gradle.kts" ]; then
+            echo "settings.gradle.kts not found inside the zip"; find _src | head -40; exit 1
+          fi
+          echo "PROJECT_DIR=$PROJ" >> "$GITHUB_ENV"
+          ls -a "$PROJ"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Download MediaPipe hand model
+        run: |
+          cd "$PROJECT_DIR"
+          mkdir -p app/src/main/assets
+          curl -L --fail -o app/src/main/assets/hand_landmarker.task \
+            https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
+          ls -la app/src/main/assets
+
+      - name: Build debug APK
+        run: |
+          cd "$PROJECT_DIR"
+          gradle assembleDebug --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AirFlow-debug-apk
+          path: '**/build/outputs/apk/debug/*.apk'
+          if-no-files-found: error
