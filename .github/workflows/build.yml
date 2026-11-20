@@ -30,6 +30,18 @@ jobs:
           echo "PROJECT_DIR=$PROJ" >> "$GITHUB_ENV"
           ls -a "$PROJ"
 
+      # The signing key travels inside the zip. If it is missing, stop here instead of
+      # silently building with a random key (which is what forces an uninstall every time).
+      - name: Check the fixed signing key
+        run: |
+          set -euo pipefail
+          ks="$PROJECT_DIR/app/airflow-debug.keystore"
+          if [ ! -f "$ks" ]; then
+            echo "::error::app/airflow-debug.keystore is missing from the zip. Without it every build is signed with a different key and cannot update the installed app."
+            exit 1
+          fi
+          keytool -list -keystore "$ks" -storepass android | tail -3
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -47,13 +59,24 @@ jobs:
             https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
           ls -la app/src/main/assets
 
+      # GITHUB_RUN_NUMBER is picked up by app/build.gradle.kts, so the version code rises on every run.
       - name: Build debug APK
         run: |
           cd "$PROJECT_DIR"
           gradle assembleDebug --no-daemon --stacktrace
 
+      - name: Name the APK and show its signature
+        run: |
+          set -euo pipefail
+          apk=$(find "$PROJECT_DIR" -path '*build/outputs/apk/debug/*.apk' | head -1)
+          cp "$apk" AirFlow.apk
+          bt="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          # the SHA-256 below must be IDENTICAL on every run; that is what lets the update install
+          "$bt/apksigner" verify --print-certs AirFlow.apk | head -3 || true
+          "$bt/aapt" dump badging AirFlow.apk | head -1 || true
+
       - uses: actions/upload-artifact@v4
         with:
           name: AirFlow-debug-apk
-          path: '**/build/outputs/apk/debug/*.apk'
+          path: AirFlow.apk
           if-no-files-found: error
